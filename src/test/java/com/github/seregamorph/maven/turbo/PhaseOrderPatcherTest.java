@@ -42,7 +42,7 @@ class PhaseOrderPatcherTest {
     public void shouldReorderPhasesNoTestJarSupported() {
         var phases = new ArrayList<>(originalMaven3Phases);
         var beforeReorderingPhases1 = PhaseOrderPatcher.reorderPhases(
-            new TurboBuilderConfig(false), phases, Function.identity());
+            new TurboBuilderConfig(false, false), phases, Function.identity());
         var reorderedMaven3Phases = List.of(
             "validate",
             "initialize",
@@ -72,7 +72,7 @@ class PhaseOrderPatcherTest {
         assertEquals(reorderedMaven3Phases, phases);
         // repeated reorder should be no-op
         var beforeReorderingPhases2 = PhaseOrderPatcher.reorderPhases(
-            new TurboBuilderConfig(false), phases, Function.identity());
+            new TurboBuilderConfig(false, false), phases, Function.identity());
         assertEquals(reorderedMaven3Phases, beforeReorderingPhases2);
         assertEquals(reorderedMaven3Phases, phases);
         // restore
@@ -84,7 +84,7 @@ class PhaseOrderPatcherTest {
     public void shouldReorderPhasesTestJarSupported() {
         var phases = new ArrayList<>(originalMaven3Phases);
         var beforeReorderingPhases1 = PhaseOrderPatcher.reorderPhases(
-            new TurboBuilderConfig(true), phases, Function.identity());
+            new TurboBuilderConfig(true, false), phases, Function.identity());
         var reorderedMaven3Phases = List.of(
             "validate",
             "initialize",
@@ -114,7 +114,7 @@ class PhaseOrderPatcherTest {
         assertEquals(reorderedMaven3Phases, phases);
         // repeated reorder should be no-op
         var beforeReorderingPhases2 = PhaseOrderPatcher.reorderPhases(
-            new TurboBuilderConfig(true), phases, Function.identity());
+            new TurboBuilderConfig(true, false), phases, Function.identity());
         assertEquals(reorderedMaven3Phases, beforeReorderingPhases2);
         assertEquals(reorderedMaven3Phases, phases);
         // restore

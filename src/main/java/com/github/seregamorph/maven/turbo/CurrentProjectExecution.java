@@ -23,14 +23,17 @@ final class CurrentProjectExecution {
 
     List<MojoExecution> packageMojos;
 
-    private CurrentProjectExecution(MavenSession session, MavenProject project) {
+    TestExecutionCoordinator testCoordinator;
+
+    private CurrentProjectExecution(MavenSession session, MavenProject project, TestExecutionCoordinator testCoordinator) {
         // There can be scenarios when we use TurboBuilder as default, but disable per project, property or via profile,
         // when it's known that the downstream dependencies should be only scheduled when all phases are completed.
         signaled = isTrue(getProperty(session, project, "skipTurboSignal"));
+        this.testCoordinator = testCoordinator;
     }
 
-    static void doWithCurrentProject(MavenSession session, MavenProject project, Runnable task) {
-        CurrentProjectExecution execution = new CurrentProjectExecution(session, project);
+    static void doWithCurrentProject(MavenSession session, MavenProject project, TestExecutionCoordinator testCoordinator, Runnable task) {
+        CurrentProjectExecution execution = new CurrentProjectExecution(session, project, testCoordinator);
         currentProjectExecution.set(execution);
         try {
             task.run();

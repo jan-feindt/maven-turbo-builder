@@ -75,6 +75,74 @@ To enable this extension by default, add line to `.mvn/maven.config` under root 
 -T1C
 ```
 
+## Configuration Options
+
+### Sequential Test Execution by GroupId
+
+By default, tests from different modules can run in parallel even if they belong to the same Maven groupId. 
+If you have modules from the same groupId that share resources or have test dependencies that could interfere 
+with each other when running in parallel, you can enable sequential test execution per groupId:
+
+```shell
+mvn clean verify -b turbo -T1C -DsequentialTestsByGroupId=true
+```
+
+Or add it to your `.mvn/maven.config`:
+```
+-bturbo
+-T1C
+-DsequentialTestsByGroupId=true
+```
+
+When enabled, this feature ensures that:
+- Test execution (test phase) for modules with the same groupId runs sequentially
+- Tests from different groupIds can still run in parallel
+- The package phase continues to execute in parallel as before
+- Only the test execution is synchronized per groupId to prevent conflicts
+
+This is useful for scenarios where:
+- Multiple modules in the same groupId share test databases or external resources
+- Test fixtures or test data need to be isolated per groupId
+- Integration tests within a groupId have dependencies on each other
+
+**Note:** This only affects the `test` phase. Integration tests (`integration-test` phase) and other phases 
+are not affected by this setting.
+
+### Test-Jar Support (Automatic Per-Module Detection)
+
+The extension **automatically detects per-module** if a module uses the `maven-jar-plugin` with the `test-jar` goal 
+and adjusts the phase ordering **for that specific module only**:
+
+- **Modules WITHOUT test-jar**: Package phase is moved before all test-related phases (maximum parallelization)
+  - Order: `compile → package → test-compile → test`
+  
+- **Modules WITH test-jar** (auto-detected per module): Package phase is moved after test-compile but before test
+  - Order: `compile → test-compile → package → test`
+  - Test classes are compiled before packaging, making them available to downstream modules
+
+**Per-Module Optimization** (Maven 4):
+- Each module can have different phase ordering based on its test-jar configuration
+- Module A without test-jar uses maximum parallelization
+- Module B with test-jar uses compatible ordering
+- Module C without test-jar again uses maximum parallelization
+
+**Global Detection** (Maven 3):
+- Maven 3 has a limitation - if ANY module has test-jar, ALL modules use turboTestCompile mode
+- This is due to Maven 3 architecture where lifecycle phases are global
+- Maven 4 does not have this limitation and optimizes per-module
+
+**Manual Override**: You can manually control this behavior:
+```shell
+# Force turboTestCompile mode for all modules
+mvn clean verify -b turbo -T1C -DturboTestCompile=true
+
+# Disable turboTestCompile mode for all modules (auto-detection is ignored)
+mvn clean verify -b turbo -T1C -DturboTestCompile=false
+```
+
+The automatic per-module detection removes the need to manually configure `-DturboTestCompile` and provides 
+optimal parallelization for each module based on its specific needs.
+
 Example adoption:
 * [Maven Surefire, in combination with Maven Surefire Cached extension](https://github.com/seregamorph/maven-surefire/pull/2) (20% faster build + cache complementary)
 * [Maven Surefire, in combination with Develocity Extension](https://github.com/seregamorph/maven-surefire/pull/1) (20% faster build + cache complementary)
@@ -91,10 +159,12 @@ Supported versions:
 * all standard plugins like `maven-surefire-plugin`, `maven-failsafe-plugin` and other
 * plugins like Jacoco are also supported, but potentially may require to change the goal execution phase
 
-Known limitations:
-* the `test-jar` dependency (compiled test classes of other module) has limited support, because when downstream dependency is
-scheduled to be built, the `test-jar` is not yet ready. Don't use `test-jar` dependencies in your project or use
-suggested failover advice (printed on execution).
+Test-jar compatibility:
+* `test-jar` dependencies (compiled test classes from other modules) are **automatically supported per-module**
+* **Maven 4**: The extension detects test-jar per module and adjusts phase ordering individually for optimal parallelization
+* **Maven 3**: If any module has test-jar, all modules use compatible ordering (global limitation)
+* No manual configuration needed - phase reordering is optimized based on each module's test-jar usage
+* Manual override available via `-DturboTestCompile=true/false` if needed
 
 Join discussion:
 * discussed in the [Maven Developer Mailing List](https://lists.apache.org/thread/m8yd6zk3pb2k1ptyy5fs97mykzlzof3w)

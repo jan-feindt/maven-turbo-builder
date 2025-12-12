@@ -210,7 +210,7 @@ class TurboMojosExecutionStrategyMaven3Test {
             }
         };
 
-        CurrentProjectExecution.doWithCurrentProject(session, project, () -> {
+        CurrentProjectExecution.doWithCurrentProject(session, project, new TestExecutionCoordinator(false), () -> {
             turboProjectExecutionListener.beforeProjectLifecycleExecution(
                 new ProjectExecutionEvent(session, project, executionPlan));
             SignalingExecutorCompletionService.currentSignaler.set(p -> {

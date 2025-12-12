@@ -33,7 +33,6 @@ public class TurboMavenLifecycleParticipant extends AbstractMavenLifecyclePartic
     @Override
     public void afterProjectsRead(MavenSession session) throws MavenExecutionException {
         if (isTurboBuilder(session)) {
-            checkTestJarArtifacts(session);
             checkBuilderAndPhase(session);
         }
     }
@@ -42,36 +41,6 @@ public class TurboMavenLifecycleParticipant extends AbstractMavenLifecyclePartic
     public void afterSessionEnd(MavenSession session) {
         if (isTurboBuilder(session)) {
             checkBuilderAndPhase(session);
-        }
-    }
-
-    private void checkTestJarArtifacts(MavenSession session) throws MavenExecutionException {
-        TurboBuilderConfig config = TurboBuilderConfig.fromSession(session);
-        if (!config.isTurboTestCompile()) {
-            // test-jar is not supported, because package phase is now executed before compiling tests
-            for (MavenProject project : session.getProjects()) {
-                List<Plugin> jarPlugins = project.getBuildPlugins().stream()
-                    .filter(plugin ->
-                        "org.apache.maven.plugins".equals(plugin.getGroupId())
-                            && "maven-jar-plugin".equals(plugin.getArtifactId()))
-                    .collect(Collectors.toList());
-                for (Plugin jarPlugin : jarPlugins) {
-                    for (PluginExecution pluginExecution : jarPlugin.getExecutions()) {
-                        if (pluginExecution.getGoals().contains("test-jar")) {
-                            throw new MavenExecutionException("Maven started with turbo builder (`-b turbo` CLI "
-                                + "parameter or `-bturbo` in .mvn/maven.config) and it's not compatible with " + project
-                                + " test-jar project artifacts and dependencies because of build phase reordering "
-                                + "(package phase is now executed before compiling tests). The maven-jar-plugin "
-                                + "configuration of the project has configured `test-jar` goal.\n"
-                                + "This can be solved in several ways:\n"
-                                + "1. Get rid of test-jar packaging if possible\n"
-                                + "2. Opt-in support of test-jar packaging via `-DturboTestCompile` CLI parameter "
-                                + "or specified in .mvn/maven.config on a separate line",
-                                project.getFile());
-                        }
-                    }
-                }
-            }
         }
     }
 

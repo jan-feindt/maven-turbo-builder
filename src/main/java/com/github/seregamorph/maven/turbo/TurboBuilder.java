@@ -71,17 +71,27 @@ public class TurboBuilder implements Builder {
         /*@Nullable*/ List<String> originalPhases = null;
         if (PhaseOrderPatcher.isReorderOnBootstrap()) {
             // we patch the default lifecycle in-place only when "-b turbo" parameter is specified
+            // Note: For Maven 3, we cannot do per-module phase reordering, so we check if ANY module has test-jar
+            boolean anyModuleHasTestJar = session.getProjects().stream()
+                .anyMatch(TurboBuilderConfig::hasTestJarGoalStatic);
+            
             for (Lifecycle lifecycle : defaultLifeCycles.getLifeCycles()) {
                 if ("default".equals(lifecycle.getId())) {
-                    logger.warn("Turbo builder: patching default lifecycle 🏎️ (reorder package and test phases)");
-                    TurboBuilderConfig config = TurboBuilderConfig.fromSession(session);
+                    if (anyModuleHasTestJar) {
+                        logger.warn("Turbo builder: detected test-jar in one or more modules. Using turboTestCompile mode for ALL modules 🏎️ (package after test-compile)");
+                    } else {
+                        logger.warn("Turbo builder: patching default lifecycle 🏎️ (reorder package and test phases)");
+                    }
+                    TurboBuilderConfig config = new TurboBuilderConfig(
+                        anyModuleHasTestJar || MavenPropertyUtils.isTrue(MavenPropertyUtils.getProperty(session, "turboTestCompile")),
+                        MavenPropertyUtils.isTrue(MavenPropertyUtils.getProperty(session, "sequentialTestsByGroupId")));
                     originalPhases = PhaseOrderPatcher.reorderPhases(config, lifecycle.getPhases(), Function.identity());
                 }
             }
         } else {
             // since Maven 4 changes of DefaultLifecycles have no effect, instead
-            // the MojoExecution are reordered in TurboProjectExecutionListener
-            logger.warn("Turbo builder: package and test phases are reordered 🏎");
+            // the MojoExecution are reordered in TurboProjectExecutionListener (per-module)
+            logger.warn("Turbo builder: package and test phases are reordered per-module 🏎");
         }
         return originalPhases;
     }
@@ -120,6 +130,11 @@ public class TurboBuilder implements Builder {
         ProjectBuildList projectBuilds,
         List<TaskSegment> taskSegments
     ) throws InterruptedException {
+        TurboBuilderConfig config = TurboBuilderConfig.fromSession(session);
+        TestExecutionCoordinator testCoordinator = new TestExecutionCoordinator(config.isSequentialTestsByGroupId());
+        if (testCoordinator.isEnabled()) {
+            logger.info("Sequential test execution by groupId is enabled");
+        }
         int nThreads = Math.min(
             session.getRequest().getDegreeOfConcurrency(),
             session.getProjects().size());
@@ -147,7 +162,7 @@ public class TurboBuilder implements Builder {
                 ConcurrencyDependencyGraph analyzer =
                     new ConcurrencyDependencyGraph(segmentProjectBuilds, session.getProjectDependencyGraph());
                 multiThreadedProjectTaskSegmentBuild(
-                    analyzer, reactorContext, session, service, taskSegment, projectBuildMap);
+                    analyzer, reactorContext, session, service, taskSegment, projectBuildMap, testCoordinator);
                 if (reactorContext.getReactorBuildStatus().isHalted()) {
                     break;
                 }
@@ -167,7 +182,8 @@ public class TurboBuilder implements Builder {
         MavenSession rootSession,
         SignalingExecutorCompletionService service,
         TaskSegment taskSegment,
-        Map<MavenProject, ProjectSegment> projectBuildList
+        Map<MavenProject, ProjectSegment> projectBuildList,
+        TestExecutionCoordinator testCoordinator
     ) {
         // gather artifactIds which are not unique so that the respective thread names can be extended with the groupId
         Set<String> duplicateArtifactIds = gatherDuplicateArtifactIds(projectBuildList.keySet());
@@ -179,7 +195,7 @@ public class TurboBuilder implements Builder {
             ProjectSegment projectSegment = projectBuildList.get(mavenProject);
             logger.debug("Scheduling: {}", projectSegment.getProject());
             Callable<MavenProject> cb = createBuildCallable(
-                rootSession, projectSegment, reactorContext, taskSegment, duplicateArtifactIds);
+                rootSession, projectSegment, reactorContext, taskSegment, duplicateArtifactIds, testCoordinator);
             List<MavenProject> downstreamDependencies = rootSession.getProjectDependencyGraph()
                 .getDownstreamProjects(mavenProject, false);
             // negate size for descending order
@@ -205,7 +221,8 @@ public class TurboBuilder implements Builder {
                             scheduledDependent,
                             reactorContext,
                             taskSegment,
-                            duplicateArtifactIds);
+                            duplicateArtifactIds,
+                            testCoordinator);
                         List<MavenProject> downstreamDependencies = rootSession.getProjectDependencyGraph()
                             .getDownstreamProjects(mavenProject, false);
                         tasks.add(service.submit(-downstreamDependencies.size(), cb));
@@ -232,7 +249,8 @@ public class TurboBuilder implements Builder {
         ProjectSegment projectBuild,
         ReactorContext reactorContext,
         TaskSegment taskSegment,
-        Set<String> duplicateArtifactIds
+        Set<String> duplicateArtifactIds,
+        TestExecutionCoordinator testCoordinator
     ) {
         return () -> {
             final Thread currentThread = Thread.currentThread();
@@ -245,7 +263,7 @@ public class TurboBuilder implements Builder {
             currentThread.setName("mvn-turbo-builder-" + threadNameSuffix);
 
             try {
-                CurrentProjectExecution.doWithCurrentProject(projectBuild.getSession(), project, () ->
+                CurrentProjectExecution.doWithCurrentProject(projectBuild.getSession(), project, testCoordinator, () ->
                     lifecycleModuleBuilder.buildProject(projectBuild.getSession(), rootSession, reactorContext,
                             project, taskSegment));
 
