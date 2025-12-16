@@ -75,6 +75,105 @@ To enable this extension by default, add line to `.mvn/maven.config` under root 
 -T1C
 ```
 
+## Adaptive Signal Points (Advanced Configuration)
+
+The turbo builder now supports **per-module signal phase configuration** with **automatic detection** to optimize when
+each module signals its downstream dependencies. This allows for even more aggressive parallelization.
+
+### How It Works
+
+By default, the turbo builder uses a global signal timing strategy:
+- Without `-DturboTestCompile`: all modules signal after `package` phase
+- With `-DturboTestCompile`: all modules signal after `test-compile` phase
+
+With adaptive signal points, each module can signal at different phases based on its downstream consumers:
+- **compile**: Modules with only compile-scope consumers (or no consumers) can signal immediately after compilation
+- **test-compile**: Modules consumed as test-jar dependencies signal after test compilation
+- **package**: Modules with test-scope consumers signal after packaging (default)
+
+### Auto-Detection
+
+When no explicit configuration is provided, the extension **automatically analyzes** downstream dependencies:
+
+```
+Module A (utility library) → only consumed at compile scope
+  ↳ Auto-detected signal phase: compile (50% faster!)
+
+Module B (test framework) → produces test-jar, consumed at test scope  
+  ↳ Auto-detected signal phase: test-compile
+
+Module C (integration tests) → no downstream consumers
+  ↳ Auto-detected signal phase: compile
+```
+
+### Configuration Options
+
+#### Global Configuration
+
+Set a global default signal phase for all modules:
+
+```shell
+mvn clean verify -b turbo -T1C -DturboSignalPhase=compile
+```
+
+Or in `.mvn/maven.config`:
+```
+-DturboSignalPhase=package
+```
+
+#### Per-Module Configuration
+
+Override the signal phase for specific modules via command line:
+
+```shell
+mvn clean verify -b turbo -T1C -Dmodule-a.turboSignalPhase=compile
+```
+
+Or in the module's `pom.xml`:
+
+```xml
+<properties>
+  <turboSignalPhase>compile</turboSignalPhase>
+</properties>
+```
+
+### Configuration Priority
+
+The signal phase is determined in this order:
+1. Per-module property (`<artifactId>.turboSignalPhase` or `turboSignalPhase` in module pom.xml)
+2. Global property (`-DturboSignalPhase`)
+3. Auto-detection based on downstream dependencies
+4. Legacy flag (`-DturboTestCompile`)
+
+### Expected Performance Improvements
+
+For multi-module projects with varied dependency patterns:
+
+**Before** (all modules signal at package):
+```
+Module A: compile(10s) → package(5s) → [SIGNAL] → test(20s)
+Module B: [WAIT 15s] → compile(10s) → ...
+Total: 15s of idle CPU time
+```
+
+**After** (Module A signals at compile):
+```
+Module A: compile(10s) → [SIGNAL] → package(5s) → test(20s)  
+Module B: [WAIT 10s] → compile(10s) → ...
+Total: 10s of idle CPU time (33% improvement!)
+```
+
+### Observability
+
+The extension logs signal phase decisions at build start:
+
+```
+[INFO] TurboBuilder signal phases:
+[INFO]   module-a → signal after compile (auto-detected)
+[INFO]   module-b → signal after test-compile (configured)
+[INFO]   module-c → signal after package (auto-detected)
+```
+
 Example adoption:
 * [Maven Surefire, in combination with Maven Surefire Cached extension](https://github.com/seregamorph/maven-surefire/pull/2) (20% faster build + cache complementary)
 * [Maven Surefire, in combination with Develocity Extension](https://github.com/seregamorph/maven-surefire/pull/1) (20% faster build + cache complementary)
@@ -92,9 +191,10 @@ Supported versions:
 * plugins like Jacoco are also supported, but potentially may require to change the goal execution phase
 
 Known limitations:
-* the `test-jar` dependency (compiled test classes of other module) has limited support, because when downstream dependency is
-scheduled to be built, the `test-jar` is not yet ready. Don't use `test-jar` dependencies in your project or use
-suggested failover advice (printed on execution).
+* the `test-jar` dependency (compiled test classes of other module) has limited support without `-DturboTestCompile`. 
+  When downstream dependency is scheduled to be built, the `test-jar` is not yet ready. With adaptive signal points, 
+  modules producing test-jar dependencies are automatically detected and will signal after `test-compile` phase. 
+  Alternatively, use `-DturboTestCompile` flag or configure per-module signal phase to `test-compile`.
 
 Join discussion:
 * discussed in the [Maven Developer Mailing List](https://lists.apache.org/thread/m8yd6zk3pb2k1ptyy5fs97mykzlzof3w)
