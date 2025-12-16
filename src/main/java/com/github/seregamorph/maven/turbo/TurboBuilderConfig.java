@@ -77,6 +77,11 @@ public class TurboBuilderConfig {
      */
     private static String detectOptimalSignalPhase(MavenProject project, MavenSession session, 
                                                     String defaultSignalPhase) {
+        // If dependency graph is not available, use default signal phase
+        if (session.getProjectDependencyGraph() == null) {
+            return defaultSignalPhase;
+        }
+        
         List<MavenProject> downstreamProjects = 
             session.getProjectDependencyGraph().getDownstreamProjects(project, false);
         
