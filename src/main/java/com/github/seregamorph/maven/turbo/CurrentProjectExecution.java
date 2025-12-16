@@ -22,6 +22,8 @@ final class CurrentProjectExecution {
     boolean signaled;
 
     List<MojoExecution> packageMojos;
+    
+    String configuredSignalPhase;
 
     private CurrentProjectExecution(MavenSession session, MavenProject project) {
         // There can be scenarios when we use TurboBuilder as default, but disable per project, property or via profile,
@@ -31,6 +33,9 @@ final class CurrentProjectExecution {
 
     static void doWithCurrentProject(MavenSession session, MavenProject project, Runnable task) {
         CurrentProjectExecution execution = new CurrentProjectExecution(session, project);
+        // Set the configured signal phase for this project
+        TurboBuilderConfig config = TurboBuilderConfig.fromSession(session);
+        execution.configuredSignalPhase = config.getSignalPhase(project);
         currentProjectExecution.set(execution);
         try {
             task.run();
