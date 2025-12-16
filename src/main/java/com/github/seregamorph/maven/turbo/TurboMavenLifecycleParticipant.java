@@ -121,12 +121,15 @@ public class TurboMavenLifecycleParticipant extends AbstractMavenLifecyclePartic
     }
     
     private boolean isExplicitlyConfigured(MavenSession session, MavenProject project) {
-        String modulePhase = getProperty(session, project, "turboSignalPhase");
-        if (modulePhase != null) {
+        // Check per-module property in pom.xml
+        String perModulePhase = getProperty(session, project, "turboSignalPhase");
+        if (perModulePhase != null) {
             return true;
         }
-        modulePhase = getProperty(session, project, project.getArtifactId() + ".turboSignalPhase");
-        if (modulePhase != null) {
+        // Check artifact-specific property (e.g., -Dmodule-a.turboSignalPhase=compile)
+        String artifactSpecificPhase = getProperty(session, project, 
+            project.getArtifactId() + ".turboSignalPhase");
+        if (artifactSpecificPhase != null) {
             return true;
         }
         // Check for global turboSignalPhase property
