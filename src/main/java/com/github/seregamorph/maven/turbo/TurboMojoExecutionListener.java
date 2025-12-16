@@ -43,6 +43,21 @@ public class TurboMojoExecutionListener implements MojoExecutionListener {
                 logger.warn("packageMojos not initialized in TurboProjectExecutionListener");
                 return;
             }
+            
+            String currentPhase = MojoUtils.getMojoPhase(event.getExecution());
+            
+            // Check if we should signal at this phase based on configuration
+            if (!execution.signaled && execution.configuredSignalPhase != null) {
+                if (shouldSignalAtPhase(currentPhase, execution.configuredSignalPhase)) {
+                    execution.signaled = true;
+                    SignalingExecutorCompletionService.signal(event.getProject());
+                    logger.info("Module {} signaled downstream dependencies after phase: {}", 
+                               event.getProject().getArtifactId(), currentPhase);
+                    return;
+                }
+            }
+            
+            // Existing logic for package phase tracking
             if (!execution.signaled) {
                 if (execution.packageMojos.contains(event.getExecution())) {
                     execution.executedPackageMojos.add(event.getExecution());
@@ -54,6 +69,18 @@ public class TurboMojoExecutionListener implements MojoExecutionListener {
                 }
             }
         });
+    }
+    
+    private boolean shouldSignalAtPhase(String currentPhase, String targetPhase) {
+        // Signal when we complete the target phase or its immediate successor
+        if ("compile".equals(targetPhase)) {
+            return "compile".equals(currentPhase) || "process-classes".equals(currentPhase);
+        } else if ("test-compile".equals(targetPhase)) {
+            return "test-compile".equals(currentPhase) || "process-test-classes".equals(currentPhase);
+        } else if ("package".equals(targetPhase)) {
+            return "package".equals(currentPhase);
+        }
+        return false;
     }
 
     @Override

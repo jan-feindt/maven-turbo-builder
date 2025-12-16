@@ -35,6 +35,7 @@ public class TurboMavenLifecycleParticipant extends AbstractMavenLifecyclePartic
         if (isTurboBuilder(session)) {
             checkTestJarArtifacts(session);
             checkBuilderAndPhase(session);
+            logSignalPhaseDecisions(session);
         }
     }
 
@@ -106,5 +107,33 @@ public class TurboMavenLifecycleParticipant extends AbstractMavenLifecyclePartic
     private static boolean isTurboBuilder(MavenSession session) {
         String builderId = session.getRequest().getBuilderId();
         return TurboBuilder.BUILDER_TURBO.equals(builderId);
+    }
+    
+    private void logSignalPhaseDecisions(MavenSession session) {
+        TurboBuilderConfig config = TurboBuilderConfig.fromSession(session);
+        logger.info("TurboBuilder signal phases:");
+        for (MavenProject project : session.getProjects()) {
+            String signalPhase = config.getSignalPhase(project);
+            String source = isExplicitlyConfigured(session, project) ? "configured" : "auto-detected";
+            logger.info("  {} → signal after {} ({})", 
+                       project.getArtifactId(), signalPhase, source);
+        }
+    }
+    
+    private boolean isExplicitlyConfigured(MavenSession session, MavenProject project) {
+        // Check per-module property in pom.xml
+        String perModulePhase = getProperty(session, project, "turboSignalPhase");
+        if (perModulePhase != null) {
+            return true;
+        }
+        // Check artifact-specific property (e.g., -Dmodule-a.turboSignalPhase=compile)
+        String artifactSpecificPhase = getProperty(session, project, 
+            project.getArtifactId() + ".turboSignalPhase");
+        if (artifactSpecificPhase != null) {
+            return true;
+        }
+        // Check for global turboSignalPhase property
+        String globalPhase = getProperty(session, "turboSignalPhase");
+        return globalPhase != null;
     }
 }
