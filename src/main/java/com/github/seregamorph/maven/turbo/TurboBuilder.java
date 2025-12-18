@@ -180,7 +180,7 @@ public class TurboBuilder implements Builder {
         
         // Calculate critical path and log build summary
         buildStatistics.calculateCriticalPath(session.getProjectDependencyGraph());
-        buildStatistics.logBuildSummary();
+        buildStatistics.logBuildSummary(session.getProjectDependencyGraph());
     }
 
     private void multiThreadedProjectTaskSegmentBuild(

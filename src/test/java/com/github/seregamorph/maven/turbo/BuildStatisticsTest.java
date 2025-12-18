@@ -64,7 +64,8 @@ class BuildStatisticsTest {
         stats.recordModuleEnd(project);
 
         // This should not throw an exception (logging without critical path calculation)
-        stats.logBuildSummary();
+        // Pass null for dependency graph since we're not testing critical path here
+        stats.logBuildSummary(null);
     }
 
     private MavenProject createMockProject(String artifactId) {

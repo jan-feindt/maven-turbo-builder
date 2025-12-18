@@ -27,22 +27,30 @@ class BuildStatistics {
 
     private final long buildStartTime;
     private final Map<MavenProject, Long> moduleStartTimes;
+    private final Map<MavenProject, Long> moduleEndTimes;
     private final Map<MavenProject, Long> moduleDurations;
+    private final Map<MavenProject, Long> moduleWaitTimes;
     private final AtomicInteger currentActiveBuilds;
     private final AtomicInteger maxParallelism;
     private final AtomicLong totalThreadTimeNanos;
     private final AtomicLong lastUpdateNanos;
     private final Set<MavenProject> criticalPathProjects;
+    private final Map<MavenProject, MavenProject> pathPredecessor;
+    private final Map<MavenProject, Long> longestPathToProject;
 
     BuildStatistics() {
         this.buildStartTime = System.nanoTime();
         this.moduleStartTimes = new ConcurrentHashMap<>();
+        this.moduleEndTimes = new ConcurrentHashMap<>();
         this.moduleDurations = new ConcurrentHashMap<>();
+        this.moduleWaitTimes = new ConcurrentHashMap<>();
         this.currentActiveBuilds = new AtomicInteger(0);
         this.maxParallelism = new AtomicInteger(0);
         this.totalThreadTimeNanos = new AtomicLong(0);
         this.lastUpdateNanos = new AtomicLong(buildStartTime);
         this.criticalPathProjects = ConcurrentHashMap.newKeySet();
+        this.pathPredecessor = new ConcurrentHashMap<>();
+        this.longestPathToProject = new ConcurrentHashMap<>();
     }
 
     /**
@@ -64,6 +72,7 @@ class BuildStatistics {
      */
     void recordModuleEnd(MavenProject project) {
         long now = System.nanoTime();
+        moduleEndTimes.put(project, now);
         Long startTime = moduleStartTimes.get(project);
         if (startTime != null) {
             long duration = now - startTime;
@@ -76,6 +85,35 @@ class BuildStatistics {
         updateAverageParallelism(now);
         
         logger.debug("Module {} completed (active builds: {})", project.getArtifactId(), active);
+    }
+
+    /**
+     * Calculate wait time for a module based on when its dependencies completed.
+     */
+    void calculateWaitTime(MavenProject project, ProjectDependencyGraph dependencyGraph) {
+        Long startTime = moduleStartTimes.get(project);
+        if (startTime == null) {
+            return;
+        }
+
+        // Find the latest end time of all upstream dependencies
+        List<MavenProject> upstreamProjects = dependencyGraph.getUpstreamProjects(project, false);
+        long maxDependencyEndTime = buildStartTime;
+        
+        for (MavenProject upstream : upstreamProjects) {
+            Long upstreamEndTime = moduleEndTimes.get(upstream);
+            if (upstreamEndTime != null && upstreamEndTime > maxDependencyEndTime) {
+                maxDependencyEndTime = upstreamEndTime;
+            }
+        }
+
+        // Wait time is the time between when dependencies finished and when this module started
+        if (maxDependencyEndTime < startTime) {
+            long waitTime = startTime - maxDependencyEndTime;
+            moduleWaitTimes.put(project, waitTime);
+        } else {
+            moduleWaitTimes.put(project, 0L);
+        }
     }
 
     private void updateMaxParallelism(int currentActive) {
@@ -100,9 +138,10 @@ class BuildStatistics {
             return;
         }
 
-        // Build a map of project to its longest path time (including dependencies)
-        Map<MavenProject, Long> longestPathToProject = new HashMap<>();
-        Map<MavenProject, MavenProject> pathPredecessor = new HashMap<>();
+        // Calculate wait times for all modules
+        for (MavenProject project : moduleDurations.keySet()) {
+            calculateWaitTime(project, dependencyGraph);
+        }
 
         // Get all projects in topological order (dependencies first)
         List<MavenProject> sortedProjects = dependencyGraph.getSortedProjects();
@@ -154,7 +193,7 @@ class BuildStatistics {
     /**
      * Log a comprehensive build summary with timing statistics, parallelism metrics, and critical path.
      */
-    void logBuildSummary() {
+    void logBuildSummary(ProjectDependencyGraph dependencyGraph) {
         long totalBuildTime = System.nanoTime() - buildStartTime;
         double totalSeconds = totalBuildTime / 1_000_000_000.0;
 
@@ -164,34 +203,43 @@ class BuildStatistics {
             averageParallelism = totalThreadTimeNanos.get() / (double) totalBuildTime;
         }
 
+        // Calculate efficiency metrics
+        long totalModuleBuildTime = moduleDurations.values().stream().mapToLong(Long::longValue).sum();
+        double efficiency = 0.0;
+        if (totalBuildTime > 0 && averageParallelism > 0) {
+            efficiency = (totalModuleBuildTime / (double) totalBuildTime) / averageParallelism * 100.0;
+        }
+
         logger.info("------------------------------------------------------------------------");
         logger.info("Reactor Summary - Turbo Builder Performance:");
         logger.info("------------------------------------------------------------------------");
         logger.info("Total build time: {}", formatDuration(totalBuildTime));
         logger.info("Max parallelism used: {} threads", maxParallelism.get());
         logger.info("Average parallelism: {} threads", Math.round(averageParallelism * 10.0) / 10.0);
+        logger.info("Parallelization efficiency: {}%", Math.round(efficiency));
         logger.info("");
 
-        // Log critical path
-        if (!criticalPathProjects.isEmpty()) {
-            List<MavenProject> criticalPathList = new ArrayList<>(criticalPathProjects);
-            // Sort by duration descending to show bottlenecks first
-            criticalPathList.sort(Comparator.comparing(
-                p -> moduleDurations.getOrDefault(p, 0L)).reversed());
-
-            long criticalPathTime = criticalPathList.stream()
-                .mapToLong(p -> moduleDurations.getOrDefault(p, 0L))
-                .sum();
-
-            logger.info("Critical Path (bottleneck modules):");
-            for (MavenProject project : criticalPathList) {
-                long duration = moduleDurations.getOrDefault(project, 0L);
-                logger.info("  {} {}", 
-                    padRight(project.getArtifactId(), 50, '.'),
-                    formatDuration(duration));
+        // Log critical path with tree visualization
+        if (!criticalPathProjects.isEmpty() && dependencyGraph != null) {
+            // Find the root of the critical path (project with no critical predecessor)
+            MavenProject criticalRoot = null;
+            for (MavenProject project : criticalPathProjects) {
+                if (!pathPredecessor.containsKey(project)) {
+                    criticalRoot = project;
+                    break;
+                }
             }
-            logger.info("Critical path time: {}", formatDuration(criticalPathTime));
-            logger.info("");
+
+            if (criticalRoot != null) {
+                long criticalPathTime = longestPathToProject.getOrDefault(
+                    findCriticalPathEnd(), 0L);
+
+                logger.info("Critical Path (bottleneck modules):");
+                logger.info("Total critical path time: {}", formatDuration(criticalPathTime));
+                logger.info("");
+                logDependencyTree(criticalRoot, dependencyGraph, "", true, new HashSet<>());
+                logger.info("");
+            }
         }
 
         // Log all module build times sorted by duration
@@ -202,13 +250,116 @@ class BuildStatistics {
         for (Map.Entry<MavenProject, Long> entry : sortedModules) {
             MavenProject project = entry.getKey();
             long duration = entry.getValue();
-            String marker = criticalPathProjects.contains(project) ? " [CRITICAL PATH]" : "";
-            logger.info("  {} {}{}",
-                padRight(project.getArtifactId(), 50, '.'),
+            long waitTime = moduleWaitTimes.getOrDefault(project, 0L);
+            boolean isCritical = criticalPathProjects.contains(project);
+            boolean isBottleneck = isBottleneck(project);
+            
+            String marker = "";
+            if (isCritical) {
+                marker = " [CRITICAL PATH]";
+            }
+            if (isBottleneck) {
+                marker += " [BOTTLENECK]";
+            }
+            
+            String waitInfo = waitTime > 0 ? String.format(" (wait: %s)", formatDuration(waitTime)) : "";
+            logger.info("  {} {}{}{}",
+                padRight(project.getArtifactId(), 45, '.'),
                 formatDuration(duration),
+                waitInfo,
                 marker);
         }
         logger.info("------------------------------------------------------------------------");
+    }
+
+    /**
+     * Find the end of the critical path (project with longest total path).
+     */
+    private MavenProject findCriticalPathEnd() {
+        MavenProject criticalEnd = null;
+        long maxPathLength = 0L;
+        for (Map.Entry<MavenProject, Long> entry : longestPathToProject.entrySet()) {
+            if (entry.getValue() > maxPathLength) {
+                maxPathLength = entry.getValue();
+                criticalEnd = entry.getKey();
+            }
+        }
+        return criticalEnd;
+    }
+
+    /**
+     * Log the dependency tree in a tree-style format with └─> and │ characters.
+     */
+    private void logDependencyTree(MavenProject project, ProjectDependencyGraph dependencyGraph, 
+                                   String prefix, boolean isRoot, Set<MavenProject> visited) {
+        if (visited.contains(project)) {
+            return;
+        }
+        visited.add(project);
+
+        long duration = moduleDurations.getOrDefault(project, 0L);
+        long waitTime = moduleWaitTimes.getOrDefault(project, 0L);
+        boolean isBottleneck = isBottleneck(project);
+        
+        String marker = isBottleneck ? " [BOTTLENECK]" : "";
+        String waitInfo = waitTime > 0 ? String.format(" (wait: %s)", formatDuration(waitTime)) : "";
+        
+        if (isRoot) {
+            logger.info("  {} {} {}{}{}",
+                "└─>",
+                padRight(project.getArtifactId(), 40, '.'),
+                formatDuration(duration),
+                waitInfo,
+                marker);
+        } else {
+            logger.info("{}  {} {} {}{}{}",
+                prefix,
+                "└─>",
+                padRight(project.getArtifactId(), 40, '.'),
+                formatDuration(duration),
+                waitInfo,
+                marker);
+        }
+
+        // Find the next project in the critical path
+        MavenProject nextInPath = null;
+        for (Map.Entry<MavenProject, MavenProject> entry : pathPredecessor.entrySet()) {
+            if (entry.getValue().equals(project) && criticalPathProjects.contains(entry.getKey())) {
+                nextInPath = entry.getKey();
+                break;
+            }
+        }
+
+        if (nextInPath != null) {
+            String newPrefix = isRoot ? "    │" : prefix + "    │";
+            logDependencyTree(nextInPath, dependencyGraph, newPrefix, false, visited);
+        }
+    }
+
+    /**
+     * Determine if a module is a bottleneck (significantly impacts build time).
+     * A module is considered a bottleneck if its duration is > 10% of total build time
+     * or > 20% of the critical path time.
+     */
+    private boolean isBottleneck(MavenProject project) {
+        long duration = moduleDurations.getOrDefault(project, 0L);
+        long totalBuildTime = System.nanoTime() - buildStartTime;
+        
+        // Check if duration is > 10% of total build time
+        if (duration > totalBuildTime * 0.1) {
+            return true;
+        }
+
+        // Check if duration is > 20% of critical path time
+        MavenProject criticalEnd = findCriticalPathEnd();
+        if (criticalEnd != null) {
+            long criticalPathTime = longestPathToProject.getOrDefault(criticalEnd, 0L);
+            if (criticalPathTime > 0 && duration > criticalPathTime * 0.2) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static String formatDuration(long nanos) {
