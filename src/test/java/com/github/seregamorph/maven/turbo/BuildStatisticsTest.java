@@ -1,5 +1,6 @@
 package com.github.seregamorph.maven.turbo;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
@@ -47,7 +48,7 @@ class BuildStatisticsTest {
         stats.recordModuleEnd(project1);
         
         // Max parallelism should still be 2
-        assertTrue(getMaxParallelism(stats) == 2);
+        assertEquals(2, getMaxParallelism(stats));
 
         // End second module
         stats.recordModuleEnd(project2);
