@@ -24,6 +24,8 @@ import org.slf4j.LoggerFactory;
 class BuildStatistics {
 
     private static final Logger logger = LoggerFactory.getLogger(BuildStatistics.class);
+    private static final int MODULE_NAME_PADDING = 45;
+    private static final int TREE_NAME_PADDING = 40;
 
     private final long buildStartTime;
     private final Map<MavenProject, Long> moduleStartTimes;
@@ -264,7 +266,7 @@ class BuildStatistics {
             
             String waitInfo = waitTime > 0 ? String.format(" (wait: %s)", formatDuration(waitTime)) : "";
             logger.info("  {} {}{}{}",
-                padRight(project.getArtifactId(), 45, '.'),
+                padRight(project.getArtifactId(), MODULE_NAME_PADDING, '.'),
                 formatDuration(duration),
                 waitInfo,
                 marker);
@@ -293,6 +295,7 @@ class BuildStatistics {
     private void logDependencyTree(MavenProject project, ProjectDependencyGraph dependencyGraph, 
                                    String prefix, boolean isRoot, Set<MavenProject> visited) {
         if (visited.contains(project)) {
+            logger.warn("Circular dependency detected for project: {}", project.getArtifactId());
             return;
         }
         visited.add(project);
@@ -307,7 +310,7 @@ class BuildStatistics {
         if (isRoot) {
             logger.info("  {} {} {}{}{}",
                 "└─>",
-                padRight(project.getArtifactId(), 40, '.'),
+                padRight(project.getArtifactId(), TREE_NAME_PADDING, '.'),
                 formatDuration(duration),
                 waitInfo,
                 marker);
@@ -315,7 +318,7 @@ class BuildStatistics {
             logger.info("{}  {} {} {}{}{}",
                 prefix,
                 "└─>",
-                padRight(project.getArtifactId(), 40, '.'),
+                padRight(project.getArtifactId(), TREE_NAME_PADDING, '.'),
                 formatDuration(duration),
                 waitInfo,
                 marker);
