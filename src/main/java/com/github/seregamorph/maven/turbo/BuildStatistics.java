@@ -169,7 +169,7 @@ class BuildStatistics {
         logger.info("------------------------------------------------------------------------");
         logger.info("Total build time: {}", formatDuration(totalBuildTime));
         logger.info("Max parallelism used: {} threads", maxParallelism.get());
-        logger.info("Average parallelism: {:.1f} threads", averageParallelism);
+        logger.info("Average parallelism: {} threads", String.format("%.1f", averageParallelism));
         logger.info("");
 
         // Log critical path
