@@ -221,7 +221,14 @@ class BuildStatistics {
         logger.info("Parallelization efficiency: {}%", Math.round(efficiency));
         logger.info("");
 
+        // Find the module that finished last (actual build end)
+        MavenProject actualBuildEnd = moduleEndTimes.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .orElse(null);
+
         // Log critical path with tree visualization
+        MavenProject criticalPathEnd = null;
         if (!criticalPathProjects.isEmpty() && dependencyGraph != null) {
             // Find the root of the critical path (project with no critical predecessor)
             MavenProject criticalRoot = null;
@@ -233,15 +240,64 @@ class BuildStatistics {
             }
 
             if (criticalRoot != null) {
-                long criticalPathTime = longestPathToProject.getOrDefault(
-                    findCriticalPathEnd(), 0L);
+                criticalPathEnd = findCriticalPathEnd();
+                long criticalPathTime = longestPathToProject.getOrDefault(criticalPathEnd, 0L);
+                double criticalPathPercent = totalBuildTime > 0 
+                    ? (criticalPathTime / (double) totalBuildTime) * 100.0 : 0.0;
 
-                logger.info("Critical Path (bottleneck modules):");
-                logger.info("Total critical path time: {}", formatDuration(criticalPathTime));
+                logger.info("Critical Path (longest dependency chain):");
+                logger.info("Total critical path time: {} ({}% of total build)",
+                    formatDuration(criticalPathTime),
+                    Math.round(criticalPathPercent));
                 logger.info("");
                 logDependencyTree(criticalRoot, dependencyGraph, "", true, new HashSet<>());
                 logger.info("");
             }
+        }
+
+        // Log actual build end information
+        if (actualBuildEnd != null) {
+            long actualEndTime = moduleEndTimes.getOrDefault(actualBuildEnd, 0L);
+            long actualStartTime = moduleStartTimes.getOrDefault(actualBuildEnd, 0L);
+            long actualDuration = moduleDurations.getOrDefault(actualBuildEnd, 0L);
+            long actualWaitTime = moduleWaitTimes.getOrDefault(actualBuildEnd, 0L);
+
+            boolean sameAsCriticalPath = actualBuildEnd.equals(criticalPathEnd);
+
+            logger.info("Actual Build End (last module to complete):");
+            if (sameAsCriticalPath) {
+                logger.info("  Module: {} (same as critical path end) ✓", actualBuildEnd.getArtifactId());
+                logger.info("  This indicates optimal scheduling - the critical path determined build time.");
+            } else {
+                logger.info("  Module: {}", actualBuildEnd.getArtifactId());
+                logger.info("  Finished at: {} (actual build end)", formatDuration(actualEndTime - buildStartTime));
+                logger.info("  Build duration: {}", formatDuration(actualDuration));
+                logger.info("  Started at: {}", formatDuration(actualStartTime - buildStartTime));
+                if (actualWaitTime > 0) {
+                    logger.info("  Wait time: {} (scheduling/thread availability delay)", formatDuration(actualWaitTime));
+                }
+                
+                if (dependencyGraph != null) {
+                    // Calculate when dependencies were ready
+                    List<MavenProject> upstreamProjects = dependencyGraph.getUpstreamProjects(actualBuildEnd, false);
+                    long dependenciesReadyAt = buildStartTime;
+                    for (MavenProject upstream : upstreamProjects) {
+                        Long upstreamEndTime = moduleEndTimes.get(upstream);
+                        if (upstreamEndTime != null && upstreamEndTime > dependenciesReadyAt) {
+                            dependenciesReadyAt = upstreamEndTime;
+                        }
+                    }
+                    if (dependenciesReadyAt > buildStartTime) {
+                        logger.info("  Dependencies ready at: {}", formatDuration(dependenciesReadyAt - buildStartTime));
+                    }
+                }
+                
+                logger.info("");
+                logger.info("⚠️  Note: {} finished AFTER the critical path completed.", actualBuildEnd.getArtifactId());
+                logger.info("    This indicates thread starvation or scheduling inefficiency.");
+                logger.info("    Consider increasing parallelism or optimizing module order.");
+            }
+            logger.info("");
         }
 
         // Log all module build times sorted by duration
