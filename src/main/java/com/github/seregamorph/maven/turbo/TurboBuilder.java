@@ -130,6 +130,9 @@ public class TurboBuilder implements Builder {
         ProjectBuildList projectBuilds,
         List<TaskSegment> taskSegments
     ) throws InterruptedException {
+        // Initialize build statistics tracking
+        BuildStatistics buildStatistics = new BuildStatistics();
+        
         TurboBuilderConfig config = TurboBuilderConfig.fromSession(session);
         TestExecutionCoordinator testCoordinator = new TestExecutionCoordinator(config.isSequentialTestsByGroupId());
         if (testCoordinator.isEnabled()) {
@@ -162,7 +165,7 @@ public class TurboBuilder implements Builder {
                 ConcurrencyDependencyGraph analyzer =
                     new ConcurrencyDependencyGraph(segmentProjectBuilds, session.getProjectDependencyGraph());
                 multiThreadedProjectTaskSegmentBuild(
-                    analyzer, reactorContext, session, service, taskSegment, projectBuildMap, testCoordinator);
+                    analyzer, reactorContext, session, service, taskSegment, projectBuildMap, testCoordinator, buildStatistics);
                 if (reactorContext.getReactorBuildStatus().isHalted()) {
                     break;
                 }
@@ -174,6 +177,10 @@ public class TurboBuilder implements Builder {
 
         executor.shutdown();
         executor.awaitTermination(Long.MAX_VALUE, TimeUnit.MILLISECONDS);
+        
+        // Calculate critical path and log build summary
+        buildStatistics.calculateCriticalPath(session.getProjectDependencyGraph());
+        buildStatistics.logBuildSummary(session.getProjectDependencyGraph());
     }
 
     private void multiThreadedProjectTaskSegmentBuild(
@@ -183,7 +190,8 @@ public class TurboBuilder implements Builder {
         SignalingExecutorCompletionService service,
         TaskSegment taskSegment,
         Map<MavenProject, ProjectSegment> projectBuildList,
-        TestExecutionCoordinator testCoordinator
+        TestExecutionCoordinator testCoordinator,
+        BuildStatistics buildStatistics
     ) {
         // gather artifactIds which are not unique so that the respective thread names can be extended with the groupId
         Set<String> duplicateArtifactIds = gatherDuplicateArtifactIds(projectBuildList.keySet());
@@ -195,7 +203,7 @@ public class TurboBuilder implements Builder {
             ProjectSegment projectSegment = projectBuildList.get(mavenProject);
             logger.debug("Scheduling: {}", projectSegment.getProject());
             Callable<MavenProject> cb = createBuildCallable(
-                rootSession, projectSegment, reactorContext, taskSegment, duplicateArtifactIds, testCoordinator);
+                rootSession, projectSegment, reactorContext, taskSegment, duplicateArtifactIds, testCoordinator, buildStatistics);
             List<MavenProject> downstreamDependencies = rootSession.getProjectDependencyGraph()
                 .getDownstreamProjects(mavenProject, false);
             // negate size for descending order
@@ -206,6 +214,9 @@ public class TurboBuilder implements Builder {
         for (int i = 0; i < analyzer.getNumberOfBuilds(); i++) {
             try {
                 MavenProject projectBuild = service.takeSignaled();
+                // Record module completion
+                buildStatistics.recordModuleEnd(projectBuild);
+                
                 if (reactorContext.getReactorBuildStatus().isHalted()) {
                     return;
                 }
@@ -222,7 +233,8 @@ public class TurboBuilder implements Builder {
                             reactorContext,
                             taskSegment,
                             duplicateArtifactIds,
-                            testCoordinator);
+                            testCoordinator,
+                            buildStatistics);
                         List<MavenProject> downstreamDependencies = rootSession.getProjectDependencyGraph()
                             .getDownstreamProjects(mavenProject, false);
                         tasks.add(service.submit(-downstreamDependencies.size(), cb));
@@ -250,7 +262,8 @@ public class TurboBuilder implements Builder {
         ReactorContext reactorContext,
         TaskSegment taskSegment,
         Set<String> duplicateArtifactIds,
-        TestExecutionCoordinator testCoordinator
+        TestExecutionCoordinator testCoordinator,
+        BuildStatistics buildStatistics
     ) {
         return () -> {
             final Thread currentThread = Thread.currentThread();
@@ -263,6 +276,9 @@ public class TurboBuilder implements Builder {
             currentThread.setName("mvn-turbo-builder-" + threadNameSuffix);
 
             try {
+                // Record module start
+                buildStatistics.recordModuleStart(project);
+                
                 CurrentProjectExecution.doWithCurrentProject(projectBuild.getSession(), project, testCoordinator, () ->
                     lifecycleModuleBuilder.buildProject(projectBuild.getSession(), rootSession, reactorContext,
                             project, taskSegment));
