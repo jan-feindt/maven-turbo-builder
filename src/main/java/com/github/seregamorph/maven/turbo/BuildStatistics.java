@@ -262,7 +262,7 @@ class BuildStatistics {
             long actualDuration = moduleDurations.getOrDefault(actualBuildEnd, 0L);
             long actualWaitTime = moduleWaitTimes.getOrDefault(actualBuildEnd, 0L);
 
-            boolean sameAsCriticalPath = actualBuildEnd.equals(criticalPathEnd);
+            boolean sameAsCriticalPath = criticalPathEnd != null && actualBuildEnd.equals(criticalPathEnd);
 
             logger.info("Actual Build End (last module to complete):");
             if (sameAsCriticalPath) {
@@ -292,10 +292,13 @@ class BuildStatistics {
                     }
                 }
                 
-                logger.info("");
-                logger.info("⚠️  Note: {} finished AFTER the critical path completed.", actualBuildEnd.getArtifactId());
-                logger.info("    This indicates thread starvation or scheduling inefficiency.");
-                logger.info("    Consider increasing parallelism or optimizing module order.");
+                // Only show warning if critical path end exists and is different
+                if (criticalPathEnd != null) {
+                    logger.info("");
+                    logger.info("⚠️  Note: {} finished AFTER the critical path completed.", actualBuildEnd.getArtifactId());
+                    logger.info("    This indicates thread starvation or scheduling inefficiency.");
+                    logger.info("    Consider increasing parallelism or optimizing module order.");
+                }
             }
             logger.info("");
         }
